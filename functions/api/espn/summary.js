@@ -4,14 +4,19 @@ export async function onRequest({ request }) {
   target.search = url.search;
 
   const resp = await fetch(target.toString(), {
-    headers: { "Accept": "application/json" },
+    method: "GET",
+    headers: {
+      "Accept": "application/json,text/plain,*/*",
+      "User-Agent": "Mozilla/5.0 (compatible; nfl-excitement-index/1.0)",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Referer": "https://www.espn.com/",
+    },
+    cf: { cacheTtl: 300, cacheEverything: true },
   });
 
-  return new Response(resp.body, {
-    status: resp.status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "public, max-age=60",
-    },
-  });
+  const headers = new Headers(resp.headers);
+  headers.set("Content-Type", "application/json; charset=utf-8");
+  headers.set("Cache-Control", "public, max-age=300");
+
+  return new Response(resp.body, { status: resp.status, headers });
 }
