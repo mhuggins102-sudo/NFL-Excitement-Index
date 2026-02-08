@@ -2,6 +2,15 @@ import{createElement as h,useState,useCallback,useEffect,useRef,Fragment}from"ht
 import{createRoot}from"https://esm.sh/react-dom@18.2.0/client";
 import{TEAMS,tn,TK,espnSB,espnSum,parseEv,computeExc,oGrade,gradeFor,extractKP,buildBox,buildStats,buildPlayerStats,buildSummaryData,getAllPlays}from"./engine.js";
 
+// Basic on-screen error reporting (helps diagnose blank screens)
+const __errBox=(msg)=>{
+  const el=document.getElementById("app");
+  if(!el) return;
+  el.innerHTML = `<div style="max-width:900px;margin:24px auto;padding:16px;border:1px solid #444;border-radius:12px;font-family:ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;color:#eee;background:#111;">${msg}</div>`;
+};
+window.addEventListener("error",(e)=>{__errBox("JS Error: "+(e?.message||e));});
+window.addEventListener("unhandledrejection",(e)=>{__errBox("Unhandled promise rejection: "+(e?.reason?.message||e?.reason||e));});
+
 const cc=c=>({s:"cs",a:"ca",b:"cb",c:"cc",d:"cd",f:"cf"}[c]||"");
 const bc=c=>({s:"bs",a:"ba",b:"bbl",c:"bc",d:"bd",f:"bf2"}[c]||"");
 
@@ -375,4 +384,4 @@ function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
       ):null));
 }
 
-createRoot(document.getElementById("app")).render(h(App));
+try{createRoot(document.getElementById("app")).render(h(App));}catch(e){console.error(e);__errBox("Render failed: "+(e?.message||e)+"\n\n"+(e?.stack||""));}
