@@ -5,218 +5,53 @@ import{TEAMS,tn,TK,espnSB,espnSum,parseEv,computeExc,oGrade,gradeFor,extractKP,b
 const cc=c=>({s:"cs",a:"ca",b:"cb",c:"cc",d:"cd",f:"cf"}[c]||"");
 const bc=c=>({s:"bs",a:"ba",b:"bbl",c:"bc",d:"bd",f:"bf2"}[c]||"");
 
-const normTeam=(x)=>x==="LAR"?"LA":x;
 // ── Claude API Summary ──
-// ── Recap Generator (local, no external API) ──
-const _ns=s=>(s||"").toString().replace(/\s+/g," ").trim();
+async function generateSummary(data){
+  const prompt=`You are writing a game recap for The Athletic. Your audience is NFL fans who missed the game and want to know what happened. Write the way Nate Taylor, Zach Kram, or Mike Sando would — authoritative, vivid, specific, flowing. Not a box score. Not a template. A story.
 
-function _joinSentences(parts){
-  return parts.filter(Boolean).map(p=>p.replace(/\s+/g," ").trim()).filter(Boolean).join(" ");
-}
-function _fmtPer(per){
-  if(!per) return "";
-  return per<=4?`Q${per}`:"OT";
-}
-function _fmtDelta(d){
-  const x=Math.round(Math.abs(d)*100);
-  return x?`${x} pts`:"";
-}
-function _pick(arr,seed){
-  if(!arr.length) return "";
-  // deterministic "random" pick
-  const i=Math.abs(seed)%arr.length;
-  return arr[i];
+HERE IS THE GAME DATA. Use ONLY these facts. Do NOT make up any stats, scores, or events:
+${JSON.stringify(data, null, 1)}
+
+STYLE REQUIREMENTS:
+- 3-4 paragraphs. Flowing prose. No bullet points, no headers, no labels, no section titles.
+- LEDE: One sentence that captures the result AND the story. Not "Team A defeated Team B 30-20." Instead: "Jayden Daniels threw five touchdown passes and Washington's defense forced three turnovers to pull away from Philadelphia 36-33 in a game that wasn't as close as the final score suggests." Lead with what made the game interesting.
+- BODY: Walk through the game chronologically. Use the scoringPlays and their runningScore fields to reference specific margins at specific moments ("Washington led 21-3 at halftime", "Philadelphia cut it to 28-26 in the third"). Name players by last name. Cite their exact stats from playerLeaders.
+- Describe HOW things happened — was it a 70-yard bomb? A goal-line stand? A pick-six? Use the play descriptions from scoringPlays.
+- Reference turnovers, missed kicks, or critical stops from keyNonScoringPlays when they shaped the game.
+- Use full team names (Eagles, Commanders, Chiefs) not abbreviations.
+- CLOSING: One sentence capturing what the game meant or its character.
+- Past tense. No cliches. No "when it was all said and done." No "at the end of the day."
+- If the game was a blowout, say so directly. Describe when it was effectively over.
+
+Write the recap now.`;
+
+  try{
+    const r=await fetch("https://api.anthropic.com/v1/messages",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1200,messages:[{role:"user",content:prompt}]})
+    });
+    if(!r.ok)return null;
+    const d=await r.json();const text=d.content?.[0]?.text;
+    if(!text)return null;
+    return text.split(/\n\n+/).filter(p=>p.trim().length>0);
+  }catch(e){return null}
 }
 
-function _cleanPlay(s){
-  s=_norm(s);
-  if(!s) return "";
-  // Strip boilerplate after XP / 2pt details to keep recaps readable.
-  const cutMarkers=[
-    "extra point", "TWO-POINT CONVERSION", "TWO POINT CONVERSION", "two-point conversion", "Penalty", "PENALTY"
-  ];
-  for(const m of cutMarkers){
-    const i=s.toLowerCase().indexOf(m.toLowerCase());
-    if(i>0){ s=s.slice(0,i).trim(); break; }
+function fallbackSummary(data){
+  const pa=[];
+  pa.push(`${data.matchup}. Final: ${data.finalScore}. ${data.date}${data.venue?` at ${data.venue}`:""}.`);
+  const log=data.scoringPlays||[];
+  if(log.length>=4){
+    const half=log.filter(s=>s.period==="Q1"||s.period==="Q2");
+    const lastHalf=half[half.length-1];
+    if(lastHalf)pa.push(`The halftime score was ${lastHalf.runningScore} after ${half.length} first-half scoring drives.`);
   }
-  // Remove trailing punctuation spam
-  s=s.replace(/\.+$/,"").trim();
-  return s;
+  if(data.playerLeaders&&data.playerLeaders.length>0)pa.push(`Key performances: ${data.playerLeaders.slice(0,4).join(". ")}.`);
+  pa.push(`Excitement Index: ${data.excitementScore} — ${data.excitementVerdict}.`);
+  return pa;
 }
 
-function _scoreLine(sum){
-  // Prefer numeric scores if provided; otherwise fall back to finalScore string.
-  if(sum && typeof sum.awayScore==="number" && typeof sum.homeScore==="number"){
-    return `${tn(sum.awayTeam)} ${sum.awayScore}, ${tn(sum.homeTeam)} ${sum.homeScore}`;
-  }
-  return sum?.finalScore||"";
-}
-
-function _winnerLoser(sum){
-  if(sum && typeof sum.awayScore==="number" && typeof sum.homeScore==="number"){
-    const aw=tn(sum.awayTeam), hm=tn(sum.homeTeam);
-    if(sum.awayScore>sum.homeScore) return {w:aw,l:hm, wAb:sum.awayTeam, lAb:sum.homeTeam};
-    if(sum.homeScore>sum.awayScore) return {w:hm,l:aw, wAb:sum.homeTeam, lAb:sum.awayTeam};
-    return {w:hm,l:aw, wAb:sum.homeTeam, lAb:sum.awayTeam, tie:true};
-  }
-  return {w:sum?.matchup||"", l:""};
-}
-
-
-function buildRecap(sum){
-  const wl=_winnerLoser(sum);
-  const score=_scoreLine(sum);
-  const wp=sum?.wpStats||null;
-  const top=(sum?.topLeveragePlays||[]).map(x=>({...x, text:_cleanPlay(x.text)})).filter(x=>x.text);
-  const vibe = (()=> {
-    const pts = (sum.homeScore||0)+(sum.awayScore||0);
-    if(wp && wp.crosses50>=6) return "a true seesaw";
-    if(wp && wp.minWp!=null && wp.minWp<0.25 && wl.w===sum.homeTeam) return "a comeback";
-    if(pts>=55) return "a shootout";
-    if(pts<=27) return "a grinder";
-    return "a tense finish";
-  })();
-
-  const lead = (()=> {
-    const end = score.split(",").slice(-1)[0].trim();
-    const base = [
-      `${wl.w} beat ${wl.l} ${end} in ${vibe}.`,
-      `${wl.w} outlasted ${wl.l} ${end} in ${vibe}.`,
-      `${wl.w} edged ${wl.l} ${end} in ${vibe}.`
-    ];
-    return base[Math.floor(((sum.excitementScore||50)+ (wp?.crosses50||0)*7)%base.length)];
-  })();
-
-  const beats = top.slice(0,3).map(tp=>{
-    const when = tp.period?`${tp.period>=5?"OT":`Q${tp.period}`} ${tp.clock||""}`:"";
-    const d = tp.delta!=null ? Math.abs(tp.delta) : null;
-    const emph = d!=null && d>=0.35 ? "the hinge" : (d!=null && d>=0.20 ? "a major swing" : "a key moment");
-    return `${when?when+": ":""}${tp.text} — ${emph}.`;
-  });
-
-  const texture = (()=> {
-    if(!wp) return null;
-    const inD = wp.inDoubtPct!=null ? `${Math.round(wp.inDoubtPct)}%` : null;
-    const c50 = wp.crosses50!=null ? wp.crosses50 : null;
-    const late = wp.lateSumAbsDelta!=null ? wp.lateSumAbsDelta.toFixed(2) : null;
-    const parts=[];
-    if(inD) parts.push(`It spent about ${inD} of snaps in the 20–80% “in doubt” band.`);
-    if(c50!=null) parts.push(`Control crossed the 50/50 line ${c50} times.`);
-    if(late) parts.push(`Late leverage (52:00 + OT) totaled ${late} in Σ|ΔWP| terms.`);
-    return parts.join(" ");
-  })();
-
-  const out=[lead];
-  if(beats.length) out.push(beats.join(" "));
-  if(texture) out.push(texture);
-
-  return out;
-}
-
-
-
-
-function WPChart({series, mode, onModeChange, exc, topLev, label}){
-  const [sel,setSel]=useState(null);
-  if(!series || series.length<2){
-    return h("div",{style:{color:"var(--text-3)",fontFamily:"JetBrains Mono",fontSize:".75rem"}}, "Win probability data unavailable.");
-  }
-
-  const maxTraw = Math.max(60, ...series.map(s=>+s.tMin||0));
-  const maxT = Math.ceil(maxTraw/5)*5;
-  const W=860, H=190, pad=26;
-  const toX = (t)=> pad + (t/maxT)*(W-2*pad);
-  const toY = (wp)=> pad + (1-wp)*(H-2*pad);
-
-  const step = Math.max(1, Math.floor(series.length/450));
-  const pts=[];
-  for(let i=0;i<series.length;i+=step){
-    const s=series[i];
-    if(s && s.tMin!=null && s.wp!=null) pts.push([toX(s.tMin), toY(s.wp)]);
-  }
-  const path = "M " + pts.map(p=>p[0].toFixed(2)+" "+p[1].toFixed(2)).join(" L ");
-
-  const opts=["Leverage","Swings","Chaos","Clutch"];
-  const overlays=[];
-
-  const dot=(x,y,fill,payload,r=3)=>h("circle",{cx:x,cy:y,r,fill,style:{cursor:"pointer"},onClick:()=>setSel(payload)});
-
-  if(mode==="Leverage"){
-    const lev=(topLev||[]).slice(0,8);
-    for(const tp of lev){
-      if(tp.tMin==null) continue;
-      overlays.push(dot(toX(tp.tMin), toY(tp.wp||0.5), "var(--gold)", {kind:"Leverage", ...tp}));
-    }
-  }else if(mode==="Swings"){
-    for(let i=1;i<series.length;i++){
-      const a=series[i-1].wp, b=series[i].wp;
-      if(a==null||b==null) continue;
-      if((a<0.5 && b>=0.5) || (a>=0.5 && b<0.5)){
-        const s=series[i];
-        overlays.push(dot(toX(s.tMin), toY(s.wp), "var(--blue)", {kind:"Swing", ...s}, 2.8));
-      }
-    }
-  }else if(mode==="Chaos"){
-    for(const s of series){
-      if(s.tag==="TO" || s.tag==="SP"){
-        overlays.push(dot(toX(s.tMin), toY(s.wp), "var(--red)", {kind:"Chaos", ...s}, 2.8));
-      }
-    }
-  }else if(mode==="Clutch"){
-    overlays.push(h("rect",{x:toX(52), y:pad, width:toX(maxT)-toX(52), height:H-2*pad, fill:"rgba(201,162,39,.08)"}));
-  }
-
-  const ticks=[];
-  for(let t=0;t<=maxT;t+=10){
-    ticks.push(h("text",{x:toX(t), y:H-8, textAnchor:"middle", className:"wpt"}, String(t)));
-  }
-  ticks.push(h("text",{x:W-pad, y:H-8, textAnchor:"end", className:"wpt"}, "min"));
-
-  const tip = sel ? h("div",{className:"mdl"},
-    h("div",{className:"mdlc"},
-      h("div",{className:"mdlh"},
-        h("div",null,"WP Detail"),
-        h("button",{className:"x",onClick:()=>setSel(null)},"×")
-      ),
-      h("div",{className:"mdlb"},
-        h("div",{style:{fontFamily:"JetBrains Mono",fontSize:".75rem",color:"var(--text-2)",marginBottom:".5rem"}},
-          sel.period?`${sel.period>=5?"OT":`Q${sel.period}`} ${sel.clock||""}`:`t=${(sel.tMin||0).toFixed(1)}m`
-        ),
-        sel.text ? h("div",{style:{lineHeight:"1.35",marginBottom:".6rem"}}, sel.text) : null,
-        h("div",{style:{fontFamily:"JetBrains Mono",fontSize:".75rem",color:"var(--text-3)"}},
-          `WP: ${(100*(sel.wp||0)).toFixed(1)}%`,
-          sel.delta!=null?`  |  ΔWP: ${(100*sel.delta).toFixed(1)} pts`:""
-        )
-      )
-    )
-  ):null;
-
-  return h("div",{className:"sec"},
-    h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:"1rem",flexWrap:"wrap"}},
-      h("div",{className:"sec-h",style:{borderBottom:"none",marginBottom:"0"}},label||"Win Probability"),
-      h("div",{style:{display:"flex",alignItems:"center",gap:".5rem"}},
-        h("div",{style:{fontFamily:"JetBrains Mono",fontSize:".65rem",letterSpacing:".08em",textTransform:"uppercase",color:"var(--text-3)"}}, "Overlay"),
-        h("select",{value:mode,onChange:e=>onModeChange(e.target.value),style:{background:"var(--bg-3)",border:"1px solid var(--border-1)",color:"var(--text-1)",padding:".35rem .5rem",borderRadius:"10px",fontFamily:"JetBrains Mono",fontSize:".75rem"}},
-          opts.map(o=>h("option",{key:o,value:o},o))
-        )
-      )
-    ),
-    h("div",{className:"svgw"},
-      h("svg",{viewBox:`0 0 ${W} ${H}`,width:"100%",height:"auto"},
-        h("rect",{x:0,y:0,width:W,height:H,rx:16,fill:"var(--bg-2)",stroke:"var(--border-1)"}),
-        h("line",{x1:pad,y1:toY(.5),x2:W-pad,y2:toY(.5),stroke:"rgba(255,255,255,.12)","strokeDasharray":"4 4"}),
-        h("path",{d:path,fill:"none",stroke:"var(--text-1)","strokeWidth":"2"}),
-        overlays,
-        ticks
-      ),
-      h("div",{style:{marginTop:".25rem",color:"var(--text-3)",fontFamily:"JetBrains Mono",fontSize:".72rem"}},
-        "Tip: click a dot to see the underlying play."
-      )
-    ),
-    tip
-  );
-}
-
+// ── App ──
 function App(){
   const[t1,sT1]=useState("");const[t2,sT2]=useState("");const[ssn,sSsn]=useState("2024");const[wk,sWk]=useState("");const[st,sSt]=useState("2");
   const[games,sGames]=useState([]);const[ldg,sLdg]=useState(false);const[prog,sProg]=useState({p:0,t:""});
@@ -224,7 +59,7 @@ function App(){
   const[sort,sSort]=useState("dateDesc");
   const[det,sDet]=useState(null);const[ldD,sLdD]=useState(false);const[err,sErr]=useState(null);
   const[meth,sMeth]=useState(false);const[cache,sCache]=useState({});const[batching,sBatching]=useState(false);
-  const[summary,sSummary]=useState(null);const[sumData,sSumData]=useState(null);const[sumLoading,sSumLoading]=useState(false);const[selGame,sSelGame]=useState(null);
+  const[summary,sSummary]=useState(null);const[sumLoading,sSumLoading]=useState(false);const[selGame,sSelGame]=useState(null);
   const detRef=useRef(null);
 
   const seasons=[];for(let y=2024;y>=1970;y--)seasons.push(""+y);
@@ -238,8 +73,6 @@ function App(){
     // FIX #4: default to dateDesc after search
     sSort("dateDesc");
     try{
-      let fetchFailures=0;
-      let fetchBatches=0;
       const res=[];let seasonsToSearch=ssn?[ssn]:[];
       if(!ssn)for(let y=2024;y>=2015;y--)seasonsToSearch.push(""+y);
       const types=st?[st]:["2","3"];const allBatches=[];
@@ -249,15 +82,12 @@ function App(){
       let done=0;
       for(let i=0;i<allBatches.length;i+=8){
         const batch=allBatches.slice(i,i+8);
-        fetchBatches+=batch.length;
-        const r=await Promise.all(batch.map(({season,w,s})=>espnSB({dates:season,week:w,seasontype:s,limit:50}).then(ev=>ev.map(parseEv).filter(Boolean)).catch((e)=>{fetchFailures++;return []})));
+        const r=await Promise.all(batch.map(({season,w,s})=>espnSB({dates:season,week:w,seasontype:s,limit:50}).then(ev=>ev.map(parseEv).filter(Boolean)).catch(()=>[])));
         for(const x of r)res.push(...x);done+=batch.length;
         sProg({p:Math.round(done/allBatches.length*100),t:seasonsToSearch.length>1?`Searching ${seasonsToSearch.length} seasons... ${Math.round(done/allBatches.length*100)}%`:`Fetching week ${Math.min(done,allBatches.length)} of ${allBatches.length}...`})}
-      let f=res.filter(g=>g && (g.done || (g.hs!==0 || g.as!==0)));
-      if(t1){const nt=normTeam(t1);f=f.filter(g=>normTeam(g.ht)===nt||normTeam(g.at)===nt)}
-      if(t2){const nt2=normTeam(t2);f=f.filter(g=>normTeam(g.ht)===nt2||normTeam(g.at)===nt2)}
+      let f=res.filter(g=>g&&g.done);
+      if(t1)f=f.filter(g=>g.ht===t1||g.at===t1);if(t2)f=f.filter(g=>g.ht===t2||g.at===t2);
       const seen=new Set();f=f.filter(g=>{if(seen.has(g.id))return false;seen.add(g.id);return true});
-      console.log("[DEBUG] games after filtering:", f.length, f.slice(0,3));
       sGames(f);
     }catch(e){sErr("Failed to load games.")}
     sLdg(false);sProg({p:100,t:""});
@@ -266,17 +96,14 @@ function App(){
   const analyze=useCallback(async g=>{
     sSelGame(g);sLdD(true);sDet(null);sErr(null);sSummary(null);
     try{
-      let fetchFailures=0;
-      let fetchBatches=0;
-      const d=await espnSum(g.id);const exc=computeExc(g,d);const kp=extractKP(d);const wp=getWPSeries(d);
+      const d=await espnSum(g.id);const exc=computeExc(g,d);const kp=extractKP(d);
       const box=buildBox(d);const stats=buildStats(d);const pStats=buildPlayerStats(d);
-      sDet({exc,kp,box,stats,pStats,d,wp});sCache(p=>({...p,[g.id]:exc.total}));sLdD(false);
+      sDet({exc,kp,box,stats,pStats,d});sCache(p=>({...p,[g.id]:exc.total}));sLdD(false);
       sSumLoading(true);
       const sumData=buildSummaryData(g,d,exc);
-      sSumData(sumData);
-      sSummary(buildRecap(sumData));
-      sSumLoading(false);
-    }catch(e){sErr("Failed to analyze. ESPN data may not be available.");sLdD(false)}
+      const aiSum=await generateSummary(sumData);
+      sSummary(aiSum||fallbackSummary(sumData));sSumLoading(false);
+    }catch(e){sErr(`Failed to analyze: ${e?.message||e}`);sLdD(false)}
   },[]);
 
   const batchAn=useCallback(async()=>{
@@ -309,11 +136,9 @@ function App(){
           h("div",{className:"fld"},h("label",null,"Team 1"),h("select",{value:t1,onChange:e=>sT1(e.target.value)},h("option",{value:""},"Any Team"),TK.map(k=>h("option",{key:k,value:k},TEAMS[k])))),
           h("div",{className:"fld"},h("label",null,"Team 2"),h("select",{value:t2,onChange:e=>sT2(e.target.value)},h("option",{value:""},"Any Team"),TK.map(k=>h("option",{key:k,value:k},TEAMS[k])))),
           h("div",{className:"fld"},h("label",null,"Season"),h("select",{value:ssn,onChange:e=>sSsn(e.target.value)},h("option",{value:""},"Last 10 Years"),seasons.map(s=>h("option",{key:s,value:s},s)))),
-          // FIX: Week and Type are grouped so they stay on the same row.
-          h("div",{className:"fld-row"},
-            h("div",{className:"fld fld-sm"},h("label",null,"Week"),h("select",{value:wk,onChange:e=>sWk(e.target.value)},h("option",{value:""},"All"),weeks.map(w=>h("option",{key:w,value:w},`Wk ${w}`)))),
-            h("div",{className:"fld fld-sm"},h("label",null,"Type"),h("select",{value:st,onChange:e=>sSt(e.target.value)},h("option",{value:"2"},"Regular"),h("option",{value:"3"},"Playoffs"),h("option",{value:""},"Both")))
-          ),
+          // FIX #2: Week and Type side by side
+          h("div",{className:"fld fld-sm"},h("label",null,"Week"),h("select",{value:wk,onChange:e=>sWk(e.target.value)},h("option",{value:""},"All"),weeks.map(w=>h("option",{key:w,value:w},`Wk ${w}`)))),
+          h("div",{className:"fld fld-sm"},h("label",null,"Type"),h("select",{value:st,onChange:e=>sSt(e.target.value)},h("option",{value:"2"},"Regular"),h("option",{value:"3"},"Playoffs"),h("option",{value:""},"Both"))),
           h("button",{className:"btn btn-p",onClick:search,disabled:ldg},ldg?"...":"Search")),
         h("div",{className:"hints"},!ssn&&t1?"Will search 2015-2024. Select a season for faster results.":"Set a team + season to see all their games.")),
       ldg?h("div",{className:"ld"},h("div",{className:"ld-r"}),h("div",{className:"ld-t"},prog.t),prog.p>0&&prog.p<100?h("div",{className:"pw"},h("div",{className:"pb"},h("div",{className:"pf",style:{width:`${prog.p}%`}}))):null):null,
@@ -341,43 +166,19 @@ function App(){
               c!=null?h("span",{className:`ep ${cc(gr.c)}`,style:{borderColor:`var(--g${gr.c})`}},`${c} — ${gr.g}`):null),
             h("div",{className:"sc2"},`${hiScore}–${loScore}`),
             h("div",{className:"mc"},dateStr,h("br"),g.week?.number?(g.season?.type===3?"Playoffs":`Week ${g.week.number}`):""))})
-            ):null,
-      (!ldg && !err && games.length===0)?h("div",{style:{textAlign:"center",padding:"2rem",color:"var(--text-3)",fontFamily:"JetBrains Mono",fontSize:".75rem"}}, "No games matched those filters.") : null
+      ):null
     ):null,
     ldD?h("div",{className:"ld"},h("div",{className:"ld-r"}),h("div",{className:"ld-t"},"Analyzing play-by-play data...")):null,
     det&&selGame?h("div",{ref:detRef},h(Detail,{g:selGame,d:det,summary,sumLoading,meth,sMeth,onBack:()=>{sDet(null);sSelGame(null);sSummary(null)}})):null,
     h("div",{className:"ftr"},"NFL Game Excitement Index · Play-by-play data from ESPN · Summaries powered by Claude"));
 }
 
-function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
-  const{exc,kp,box,stats,pStats,wp}=d;const og=oGrade(exc.total);
+function Detail({g,d,summary,sumLoading,meth,sMeth,onBack}){
+  const{exc,kp,box,stats,pStats}=d;const og=oGrade(exc.total);
   const date=new Date(g.date).toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
   const tags={td:["TD","t-td"],to:["TURNOVER","t-to"],bg:["BIG PLAY","t-bg"],cl:["CLUTCH","t-cl"],sp:["SPECIAL","t-sp"]};
 
   const passCols=["C/ATT","YDS","AVG","TD","INT","QBR"];
-  const [wpMode,setWpMode]=useState("Leverage");
-  const [catModal,setCatModal]=useState(null);
-  const openCat=(k,v)=>{
-    const wp=exc?.wp?.series||[];
-    const top=(sumData?.topLeveragePlays||[]);
-    const pick=(arr,n)=>arr.slice(0,n).map(p=>({
-      when: p.period?`${p.period>=5?"OT":`Q${p.period}`} ${p.clock||""}`:`t=${(p.tMin||0).toFixed(1)}m`,
-      text: _cleanPlay(p.text||"").slice(0,240),
-      delta: p.delta!=null? (100*p.delta): null
-    }));
-    let contrib=[];
-    if(k==="leverage") contrib=pick(top,6);
-    else if(k==="clutch") contrib=pick(top.filter(p=>p.tMin!=null && p.tMin>=52),6);
-    else if(k==="chaos") contrib=pick(wp.filter(p=>p.tag==="TO"||p.tag==="SP").sort((a,b)=>(b.absDelta||0)-(a.absDelta||0)),8);
-    else if(k==="swings"){
-      const swings=[];
-      for(let i=1;i<wp.length;i++){const a=wp[i-1].wp,b=wp[i].wp;if(a==null||b==null)continue;
-        if((a<.5&&b>=.5)||(a>=.5&&b<.5)) swings.push(wp[i]);
-      }
-      contrib=pick(swings,10);
-    }
-    setCatModal({k,v,contrib});
-  };
   const rushCols=["CAR","YDS","AVG","TD","LONG"];
   const recCols=["REC","YDS","AVG","TD","LONG","TGTS"];
 
@@ -437,11 +238,9 @@ function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
 
     h("div",{className:"sec an a4"},h("div",{className:"sec-h"},"Excitement Breakdown"),
       h("div",{className:"gg"},Object.entries(exc.scores).map(([k,v])=>{const gr=gradeFor(v.score,v.max);const pct=v.score/v.max*100;
-        return h("div",{key:k,className:"gc",role:"button",tabIndex:0,onClick:()=>openCat(k,v),onKeyDown:(e)=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openCat(k,v);}}},
+        return h("div",{key:k,className:"gc"},
           h("div",{className:"gi"},h("h3",null,v.name),h("div",{className:"ds"},v.desc),h("div",{className:"dt"},v.detail),h("div",{className:"br"},h("div",{className:`bf ${bc(gr.c)}`,style:{width:`${pct}%`}}))),
           h("div",{className:`gbg ${cc(gr.c)}`},h("div",null,gr.g),h("div",{className:"pt"},`${v.score}/${v.max}`)))}))),
-
-    h(WPChart,{series:wp?.series||[], mode:wpMode, onModeChange:setWpMode, exc, topLev:(sumData?.topLeveragePlays||[]), label: sumData ? `Win Probability (${tn(sumData.homeTeam)||sumData.homeTeam})` : "Win Probability"}),
 
     h("div",{className:"sec an a5"},h("div",{className:"sec-h"},"Game Recap"),
       h("div",{className:"wb"},
@@ -458,7 +257,7 @@ function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
     h("div",{className:"sec an a7"},
       h("button",{className:"mt",onClick:()=>sMeth(!meth)},meth?"▾":"▸"," Scoring Methodology"),
       meth?h("div",{className:"mb"},
-        h("h4",null,"Leverage (0–35)"),"Measures what percentage of the game was played within one score (8 pts). Bonus for games within 3 pts. Penalized for high average margin.",
+        h("h4",null,"Competitiveness (0–20)"),"Measures what percentage of the game was played within one score (8 pts). Bonus for games within 3 pts. Penalized for high average margin.",
         h("h4",null,"Comeback Factor (0–15)"),"Winner's max deficit overcome + loser's best non-garbage-time swing + lead reversals. Garbage-time scoring excluded.",
         h("h4",null,"Late-Game Drama (0–15)"),"Only counts Q4 events when the game is within 2 scores AT THE TIME of the event. Scoring from 55-0 to 55-7 earns nothing. Includes clutch scores, near-misses, and OT.",
         h("h4",null,"Big Plays (0–15)"),"40+ yd gains and 25+ yd TDs on offensive/return plays. Field goals excluded. Weighted by game context: big plays in close games score higher. Penalty-nullified plays excluded.",
@@ -466,32 +265,8 @@ function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
         h("h4",null,"Rivalry Factor (0–10)"),"Historical rivalry base + same division/conference + both teams' current quality.",
         h("h4",null,"Scoring Volume (0–10)"),"Total combined points. Bonus when both teams score 20+.",
         h("h4",null,"Turnovers & Momentum (0–15)"),"INTs, fumbles, defensive/ST TDs, blocked kicks, turnovers on downs, missed FGs, safeties.",
-        h("h4",null,"In Doubt (0–10)"),"Minute-by-minute tracking of lead swaps and ties (0-0 start excluded).",
-        h("h4",null,"Chaos (0–10)"),"Bonus for OT, extra for multiple OT periods."
-
-    ,catModal?h("div",{className:"mdl",onClick:(e)=>{if(e.target.classList.contains("mdl"))setCatModal(null);}},
-      h("div",{className:"mdlc"},
-        h("div",{className:"mdlh"},
-          h("div",null,catModal.v.name),
-          h("button",{className:"x",onClick:()=>setCatModal(null)},"×")
-        ),
-        h("div",{className:"mdlb"},
-          h("div",{style:{color:"var(--text-2)",marginBottom:".6rem"}},catModal.v.desc),
-          h("div",{style:{fontFamily:"JetBrains Mono",fontSize:".8rem",color:"var(--text-3)",marginBottom:".8rem"}},`This game: ${catModal.v.detail} (${catModal.v.score}/${catModal.v.max}).`),
-          catModal.contrib && catModal.contrib.length? h("div",null,
-            h("div",{style:{fontFamily:"JetBrains Mono",fontSize:".7rem",letterSpacing:".08em",textTransform:"uppercase",color:"var(--text-3)",marginBottom:".35rem"}},"Key contributors"),
-            h("div",{style:{display:"grid",gap:".4rem"}},
-              catModal.contrib.map((c,i)=>h("div",{key:i,className:"citem"},
-                h("div",{className:"ct"},c.when),
-                h("div",{className:"cx"},c.text||"(no play text)"),
-                c.delta!=null?h("div",{className:"cd"},`${Math.abs(c.delta).toFixed(1)} pts`):null
-              ))
-            )
-          ):h("div",{style:{color:"var(--text-3)"}}, "No specific contributors available for this category.")
-        )
-      )
-    ):null
-
+        h("h4",null,"Lead Changes (0–10)"),"Minute-by-minute tracking of lead swaps and ties (0-0 start excluded).",
+        h("h4",null,"Overtime (0–5)"),"Bonus for OT, extra for multiple OT periods."
       ):null));
 }
 
