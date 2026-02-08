@@ -2,15 +2,6 @@ import{createElement as h,useState,useCallback,useEffect,useRef,Fragment}from"ht
 import{createRoot}from"https://esm.sh/react-dom@18.2.0/client";
 import{TEAMS,tn,TK,espnSB,espnSum,parseEv,computeExc,oGrade,gradeFor,extractKP,buildBox,buildStats,buildPlayerStats,buildSummaryData,getAllPlays}from"./engine.js";
 
-// Basic on-screen error reporting (helps diagnose blank screens)
-const __errBox=(msg)=>{
-  const el=document.getElementById("app");
-  if(!el) return;
-  el.innerHTML = `<div style="max-width:900px;margin:24px auto;padding:16px;border:1px solid #444;border-radius:12px;font-family:ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;color:#eee;background:#111;">${msg}</div>`;
-};
-window.addEventListener("error",(e)=>{__errBox("JS Error: "+(e?.message||e));});
-window.addEventListener("unhandledrejection",(e)=>{__errBox("Unhandled promise rejection: "+(e?.reason?.message||e?.reason||e));});
-
 const cc=c=>({s:"cs",a:"ca",b:"cb",c:"cc",d:"cd",f:"cf"}[c]||"");
 const bc=c=>({s:"bs",a:"ba",b:"bbl",c:"bc",d:"bd",f:"bf2"}[c]||"");
 
@@ -132,12 +123,11 @@ function WPChart({series, mode, onModeChange, exc, topLev, label}){
   }
 
   const maxTraw = Math.max(60, ...series.map(s=>+s.tMin||0));
-  const maxT = Math.ceil(maxTraw/5)*5; // nicer ticks
+  const maxT = Math.ceil(maxTraw/5)*5;
   const W=860, H=190, pad=26;
   const toX = (t)=> pad + (t/maxT)*(W-2*pad);
   const toY = (wp)=> pad + (1-wp)*(H-2*pad);
 
-  // Downsample for performance
   const step = Math.max(1, Math.floor(series.length/450));
   const pts=[];
   for(let i=0;i<series.length;i+=step){
@@ -149,7 +139,6 @@ function WPChart({series, mode, onModeChange, exc, topLev, label}){
   const opts=["Leverage","Swings","Chaos","Clutch"];
   const overlays=[];
 
-  // helper to create clickable dot
   const dot=(x,y,fill,payload,r=3)=>h("circle",{cx:x,cy:y,r,fill,style:{cursor:"pointer"},onClick:()=>setSel(payload)});
 
   if(mode==="Leverage"){
@@ -174,11 +163,9 @@ function WPChart({series, mode, onModeChange, exc, topLev, label}){
       }
     }
   }else if(mode==="Clutch"){
-    // Shade final 8 minutes of regulation + all OT
     overlays.push(h("rect",{x:toX(52), y:pad, width:toX(maxT)-toX(52), height:H-2*pad, fill:"rgba(201,162,39,.08)"}));
   }
 
-  // Axis ticks
   const ticks=[];
   for(let t=0;t<=maxT;t+=10){
     ticks.push(h("text",{x:toX(t), y:H-8, textAnchor:"middle", className:"wpt"}, String(t)));
@@ -199,13 +186,7 @@ function WPChart({series, mode, onModeChange, exc, topLev, label}){
         h("div",{style:{fontFamily:"JetBrains Mono",fontSize:".75rem",color:"var(--text-3)"}},
           `WP: ${(100*(sel.wp||0)).toFixed(1)}%`,
           sel.delta!=null?`  |  ΔWP: ${(100*sel.delta).toFixed(1)} pts`:""
-        ),
-        sel.kind? h("div",{style:{marginTop:".6rem",color:"var(--text-3)",fontSize:".85rem"}},
-          sel.kind==="Leverage"?"A high-leverage moment: one of the largest WP swings in the game.":
-          sel.kind==="Swing"?"A true swing point: the game crossed the 50/50 line here.":
-          sel.kind==="Chaos"?"Chaos marker: a turnover or special-teams event that materially shifted WP.":
-          ""
-        ):null
+        )
       )
     )
   ):null;
@@ -236,37 +217,167 @@ function WPChart({series, mode, onModeChange, exc, topLev, label}){
   );
 }
 
+function App(){
+  const[t1,sT1]=useState("");const[t2,sT2]=useState("");const[ssn,sSsn]=useState("2024");const[wk,sWk]=useState("");const[st,sSt]=useState("2");
+  const[games,sGames]=useState([]);const[ldg,sLdg]=useState(false);const[prog,sProg]=useState({p:0,t:""});
+  // FIX #4: date sort direction toggleable: "dateDesc" (new first) or "dateAsc" (old first) or "exc"
+  const[sort,sSort]=useState("dateDesc");
+  const[det,sDet]=useState(null);const[ldD,sLdD]=useState(false);const[err,sErr]=useState(null);
+  const[meth,sMeth]=useState(false);const[cache,sCache]=useState({});const[batching,sBatching]=useState(false);
+  const[summary,sSummary]=useState(null);const[sumData,sSumData]=useState(null);const[sumLoading,sSumLoading]=useState(false);const[selGame,sSelGame]=useState(null);
+  const detRef=useRef(null);
+
+  const seasons=[];for(let y=2024;y>=1970;y--)seasons.push(""+y);
+  const weeks=[];for(let w=1;w<=18;w++)weeks.push(""+w);
+
+  useEffect(()=>{if(det&&detRef.current)detRef.current.scrollIntoView({behavior:'smooth',block:'start'})},[det]);
+
+  const search=useCallback(async()=>{
+    if(!ssn&&!t1){sErr("Select at least a season or team.");return}
+    sLdg(true);sGames([]);sDet(null);sSummary(null);sErr(null);sCache({});sProg({p:0,t:"Searching..."});sSelGame(null);
+    // FIX #4: default to dateDesc after search
+    sSort("dateDesc");
+    try{
+      let fetchFailures=0;
+      let fetchBatches=0;
+      const res=[];let seasonsToSearch=ssn?[ssn]:[];
+      if(!ssn)for(let y=2024;y>=2015;y--)seasonsToSearch.push(""+y);
+      const types=st?[st]:["2","3"];const allBatches=[];
+      for(const season of seasonsToSearch){
+        if(wk){for(const s of types)allBatches.push({season,w:wk,s})}
+        else{for(const s of types){const mx=s==="3"?5:18;for(let w=1;w<=mx;w++)allBatches.push({season,w:""+w,s})}}}
+      let done=0;
+      for(let i=0;i<allBatches.length;i+=8){
+        const batch=allBatches.slice(i,i+8);
+        fetchBatches+=batch.length;
+        const r=await Promise.all(batch.map(({season,w,s})=>espnSB({dates:season,week:w,seasontype:s,limit:50}).then(ev=>ev.map(parseEv).filter(Boolean)).catch((e)=>{fetchFailures++;return []})));
+        for(const x of r)res.push(...x);done+=batch.length;
+        sProg({p:Math.round(done/allBatches.length*100),t:seasonsToSearch.length>1?`Searching ${seasonsToSearch.length} seasons... ${Math.round(done/allBatches.length*100)}%`:`Fetching week ${Math.min(done,allBatches.length)} of ${allBatches.length}...`})}
+      let f=res.filter(g=>g && (g.done || (g.hs!==0 || g.as!==0)));
+      if(t1){const nt=normTeam(t1);f=f.filter(g=>normTeam(g.ht)===nt||normTeam(g.at)===nt)}
+      if(t2){const nt2=normTeam(t2);f=f.filter(g=>normTeam(g.ht)===nt2||normTeam(g.at)===nt2)}
+      const seen=new Set();f=f.filter(g=>{if(seen.has(g.id))return false;seen.add(g.id);return true});
+      console.log("[DEBUG] games after filtering:", f.length, f.slice(0,3));
+      sGames(f);
+    }catch(e){sErr("Failed to load games.")}
+    sLdg(false);sProg({p:100,t:""});
+  },[t1,t2,ssn,wk,st]);
+
+  const analyze=useCallback(async g=>{
+    sSelGame(g);sLdD(true);sDet(null);sErr(null);sSummary(null);
+    try{
+      let fetchFailures=0;
+      let fetchBatches=0;
+      const d=await espnSum(g.id);const exc=computeExc(g,d);const kp=extractKP(d);const wp=getWPSeries(d);
+      const box=buildBox(d);const stats=buildStats(d);const pStats=buildPlayerStats(d);
+      sDet({exc,kp,box,stats,pStats,d,wp});sCache(p=>({...p,[g.id]:exc.total}));sLdD(false);
+      sSumLoading(true);
+      const sumData=buildSummaryData(g,d,exc);
+      sSumData(sumData);
+      sSummary(buildRecap(sumData));
+      sSumLoading(false);
+    }catch(e){sErr("Failed to analyze. ESPN data may not be available.");sLdD(false)}
+  },[]);
+
+  const batchAn=useCallback(async()=>{
+    sBatching(true);const unc=games.filter(g=>!(g.id in cache));let done=0;
+    for(let i=0;i<unc.length;i+=4){
+      const b=unc.slice(i,i+4);
+      const r=await Promise.all(b.map(async g=>{try{const d=await espnSum(g.id);return{id:g.id,sc:computeExc(g,d).total}}catch{return{id:g.id,sc:0}}}));
+      const u={};for(const x of r)u[x.id]=x.sc;sCache(p=>({...p,...u}));
+      done+=b.length;sProg({p:Math.round(done/unc.length*100),t:`Analyzing ${done} of ${unc.length}...`})}
+    sBatching(false);sSort("exc");
+  },[games,cache]);
+
+  // FIX #4: Toggle date sort direction
+  function toggleDateSort(){
+    if(sort==="dateDesc")sSort("dateAsc");else sSort("dateDesc");
+  }
+
+  const sorted=[...games].sort((a,b)=>{
+    if(sort==="exc"){const sa=cache[a.id]??-1,sb=cache[b.id]??-1;return sb-sa}
+    if(sort==="dateAsc")return new Date(a.date)-new Date(b.date);
+    return new Date(b.date)-new Date(a.date); // dateDesc default
+  });
+
+  return h("div",{className:"app"},
+    h("div",{className:"hdr"},h("div",{className:"hdr-tag"},"1970 — Present"),h("h1",null,"NFL Excitement Index"),h("div",{className:"sub"},"Quantifying what makes football unforgettable")),
+    !det?h(Fragment,null,
+      // FIX #3: Removed "Find Games" label
+      h("div",{className:"sp"},
+        h("div",{className:"sr"},
+          h("div",{className:"fld"},h("label",null,"Team 1"),h("select",{value:t1,onChange:e=>sT1(e.target.value)},h("option",{value:""},"Any Team"),TK.map(k=>h("option",{key:k,value:k},TEAMS[k])))),
+          h("div",{className:"fld"},h("label",null,"Team 2"),h("select",{value:t2,onChange:e=>sT2(e.target.value)},h("option",{value:""},"Any Team"),TK.map(k=>h("option",{key:k,value:k},TEAMS[k])))),
+          h("div",{className:"fld"},h("label",null,"Season"),h("select",{value:ssn,onChange:e=>sSsn(e.target.value)},h("option",{value:""},"Last 10 Years"),seasons.map(s=>h("option",{key:s,value:s},s)))),
+          // FIX: Week and Type are grouped so they stay on the same row.
+          h("div",{className:"fld-row"},
+            h("div",{className:"fld fld-sm"},h("label",null,"Week"),h("select",{value:wk,onChange:e=>sWk(e.target.value)},h("option",{value:""},"All"),weeks.map(w=>h("option",{key:w,value:w},`Wk ${w}`)))),
+            h("div",{className:"fld fld-sm"},h("label",null,"Type"),h("select",{value:st,onChange:e=>sSt(e.target.value)},h("option",{value:"2"},"Regular"),h("option",{value:"3"},"Playoffs"),h("option",{value:""},"Both")))
+          ),
+          h("button",{className:"btn btn-p",onClick:search,disabled:ldg},ldg?"...":"Search")),
+        h("div",{className:"hints"},!ssn&&t1?"Will search 2015-2024. Select a season for faster results.":"Set a team + season to see all their games.")),
+      ldg?h("div",{className:"ld"},h("div",{className:"ld-r"}),h("div",{className:"ld-t"},prog.t),prog.p>0&&prog.p<100?h("div",{className:"pw"},h("div",{className:"pb"},h("div",{className:"pf",style:{width:`${prog.p}%`}}))):null):null,
+      err&&!det?h("div",{style:{textAlign:"center",padding:"2rem"}},h("div",{style:{color:"var(--red)",fontFamily:"Oswald",fontSize:"1.1rem"}},"Error"),h("div",{style:{color:"var(--text-3)",fontSize:".85rem"}},err)):null,
+      games.length>0&&!ldg?h("div",{className:"rl"},
+        h("div",{className:"rl-hdr"},
+          h("div",{className:"rl-cnt"},`${games.length} game${games.length!==1?"s":""} found`),
+          h("div",{className:"sc"},
+            // FIX #4: By Date toggles direction, shows arrow
+            h("button",{className:`sb${sort.startsWith("date")?" on":""}`,onClick:toggleDateSort},
+              sort==="dateAsc"?"Date ↑":"Date ↓"),
+            games.every(g=>g.id in cache)?h("button",{className:`sb${sort==="exc"?" on":""}`,onClick:()=>sSort("exc")},"By Excitement"):h("button",{className:"sb",onClick:batchAn,disabled:batching},batching?"Analyzing...":"Rank by Excitement"))),
+        batching?h("div",{className:"pw"},h("div",{className:"pb"},h("div",{className:"pf",style:{width:`${prog.p}%`}})),h("div",{className:"pl"},prog.t)):null,
+        sorted.map(g=>{const c=cache[g.id];const gr=c!=null?oGrade(c):null;
+          const hw=g.hs>g.as;const aw=g.as>g.hs;
+          const hiScore=Math.max(g.hs,g.as);const loScore=Math.min(g.hs,g.as);
+          // FIX #5: Show date for every game
+          const dateStr=new Date(g.date).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'});
+          return h("div",{key:g.id,className:"gr",onClick:()=>analyze(g)},
+            h("div",null,
+              h("span",{className:"mu"},
+                h("span",{className:aw?"wt":""},g.at),
+                h("span",{className:"at"}," @ "),
+                h("span",{className:hw?"wt":""},g.ht)),
+              c!=null?h("span",{className:`ep ${cc(gr.c)}`,style:{borderColor:`var(--g${gr.c})`}},`${c} — ${gr.g}`):null),
+            h("div",{className:"sc2"},`${hiScore}–${loScore}`),
+            h("div",{className:"mc"},dateStr,h("br"),g.week?.number?(g.season?.type===3?"Playoffs":`Week ${g.week.number}`):""))})
+            ):null,
+      (!ldg && !err && games.length===0)?h("div",{style:{textAlign:"center",padding:"2rem",color:"var(--text-3)",fontFamily:"JetBrains Mono",fontSize:".75rem"}}, "No games matched those filters.") : null
+    ):null,
+    ldD?h("div",{className:"ld"},h("div",{className:"ld-r"}),h("div",{className:"ld-t"},"Analyzing play-by-play data...")):null,
+    det&&selGame?h("div",{ref:detRef},h(Detail,{g:selGame,d:det,summary,sumLoading,meth,sMeth,onBack:()=>{sDet(null);sSelGame(null);sSummary(null)}})):null,
+    h("div",{className:"ftr"},"NFL Game Excitement Index · Play-by-play data from ESPN · Summaries powered by Claude"));
+}
 
 function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
   const{exc,kp,box,stats,pStats,wp}=d;const og=oGrade(exc.total);
   const date=new Date(g.date).toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+  const tags={td:["TD","t-td"],to:["TURNOVER","t-to"],bg:["BIG PLAY","t-bg"],cl:["CLUTCH","t-cl"],sp:["SPECIAL","t-sp"]};
 
+  const passCols=["C/ATT","YDS","AVG","TD","INT","QBR"];
+  const [wpMode,setWpMode]=useState("Leverage");
   const [catModal,setCatModal]=useState(null);
   const openCat=(k,v)=>{
-    const wpS=wp?.series||[];
+    const wp=exc?.wp?.series||[];
     const top=(sumData?.topLeveragePlays||[]);
-    const clean=(s)=>_cleanPlay(s||"");
-    const fmt=(p)=>p.period?`${p.period>=5?"OT":`Q${p.period}`} ${p.clock||""}`:`t=${(p.tMin||0).toFixed(1)}m`;
-    const pick=(arr,n)=>arr.slice(0,n).map(p=>({when:fmt(p),text:clean(p.text||p.play||p.desc||""),delta:(p.delta!=null?100*p.delta:null),wp:p.wp}));
+    const pick=(arr,n)=>arr.slice(0,n).map(p=>({
+      when: p.period?`${p.period>=5?"OT":`Q${p.period}`} ${p.clock||""}`:`t=${(p.tMin||0).toFixed(1)}m`,
+      text: _cleanPlay(p.text||"").slice(0,240),
+      delta: p.delta!=null? (100*p.delta): null
+    }));
     let contrib=[];
     if(k==="leverage") contrib=pick(top,6);
     else if(k==="clutch") contrib=pick(top.filter(p=>p.tMin!=null && p.tMin>=52),6);
-    else if(k==="chaos") contrib=pick(wpS.filter(p=>p.tag==="TO"||p.tag==="SP").sort((a,b)=>(b.absDelta||0)-(a.absDelta||0)),10);
+    else if(k==="chaos") contrib=pick(wp.filter(p=>p.tag==="TO"||p.tag==="SP").sort((a,b)=>(b.absDelta||0)-(a.absDelta||0)),8);
     else if(k==="swings"){
       const swings=[];
-      for(let i=1;i<wpS.length;i++){
-        const a=wpS[i-1].wp,b=wpS[i].wp;
-        if(a==null||b==null) continue;
-        if((a<.5&&b>=.5)||(a>=.5&&b<.5)) swings.push(wpS[i]);
+      for(let i=1;i<wp.length;i++){const a=wp[i-1].wp,b=wp[i].wp;if(a==null||b==null)continue;
+        if((a<.5&&b>=.5)||(a>=.5&&b<.5)) swings.push(wp[i]);
       }
       contrib=pick(swings,10);
     }
     setCatModal({k,v,contrib});
   };
-  const tags={td:["TD","t-td"],to:["TURNOVER","t-to"],bg:["BIG PLAY","t-bg"],cl:["CLUTCH","t-cl"],sp:["SPECIAL","t-sp"]};
-
-  const passCols=["C/ATT","YDS","AVG","TD","INT","QBR"];
-  const [wpMode,setWpMode]=useState("Leverage");
   const rushCols=["CAR","YDS","AVG","TD","LONG"];
   const recCols=["REC","YDS","AVG","TD","LONG","TGTS"];
 
@@ -310,7 +421,7 @@ function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
           ...(box[0]?.qs||[]).map((_,i)=>h("th",{key:i},i>=4?`OT${i>4?i-3:""}`:`Q${i+1}`)),
           h("th",null,"Final"))),
         h("tbody",null,box.map((r,i)=>h("tr",{key:i,className:r.win?"win":""},
-          h("td",null,r.team),...r.qs.map((q,qi)=>h("td",{key:qi},(q===""||q==null)?"—":q)),h("td",{className:"fc"},r.total)))))):null,
+          h("td",null,r.team),...r.qs.map((q,qi)=>h("td",{key:qi},q)),h("td",{className:"fc"},r.total)))))):null,
 
     stats.length>0?h("div",{className:"sec an a2"},h("div",{className:"sec-h"},"Team Statistics"),
       h("table",{className:"st"},
@@ -347,7 +458,7 @@ function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
     h("div",{className:"sec an a7"},
       h("button",{className:"mt",onClick:()=>sMeth(!meth)},meth?"▾":"▸"," Scoring Methodology"),
       meth?h("div",{className:"mb"},
-        h("h4",null,"Competitiveness (0–20)"),"Measures what percentage of the game was played within one score (8 pts). Bonus for games within 3 pts. Penalized for high average margin.",
+        h("h4",null,"Leverage (0–35)"),"Measures what percentage of the game was played within one score (8 pts). Bonus for games within 3 pts. Penalized for high average margin.",
         h("h4",null,"Comeback Factor (0–15)"),"Winner's max deficit overcome + loser's best non-garbage-time swing + lead reversals. Garbage-time scoring excluded.",
         h("h4",null,"Late-Game Drama (0–15)"),"Only counts Q4 events when the game is within 2 scores AT THE TIME of the event. Scoring from 55-0 to 55-7 earns nothing. Includes clutch scores, near-misses, and OT.",
         h("h4",null,"Big Plays (0–15)"),"40+ yd gains and 25+ yd TDs on offensive/return plays. Field goals excluded. Weighted by game context: big plays in close games score higher. Penalty-nullified plays excluded.",
@@ -355,9 +466,8 @@ function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
         h("h4",null,"Rivalry Factor (0–10)"),"Historical rivalry base + same division/conference + both teams' current quality.",
         h("h4",null,"Scoring Volume (0–10)"),"Total combined points. Bonus when both teams score 20+.",
         h("h4",null,"Turnovers & Momentum (0–15)"),"INTs, fumbles, defensive/ST TDs, blocked kicks, turnovers on downs, missed FGs, safeties.",
-        h("h4",null,"Lead Changes (0–10)"),"Minute-by-minute tracking of lead swaps and ties (0-0 start excluded).",
-        h("h4",null,"Overtime (0–5)"),"Bonus for OT, extra for multiple OT periods."
-
+        h("h4",null,"In Doubt (0–10)"),"Minute-by-minute tracking of lead swaps and ties (0-0 start excluded).",
+        h("h4",null,"Chaos (0–10)"),"Bonus for OT, extra for multiple OT periods."
 
     ,catModal?h("div",{className:"mdl",onClick:(e)=>{if(e.target.classList.contains("mdl"))setCatModal(null);}},
       h("div",{className:"mdlc"},
@@ -381,7 +491,8 @@ function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
         )
       )
     ):null
+
       ):null));
 }
 
-try{createRoot(document.getElementById("app")).render(h(App));}catch(e){console.error(e);__errBox("Render failed: "+(e?.message||e)+"\n\n"+(e?.stack||""));}
+createRoot(document.getElementById("app")).render(h(App));
