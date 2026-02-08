@@ -14,8 +14,32 @@ const RIV={"CHI-GB":10,"DAL-WAS":9,"DAL-PHI":9,"PIT-BAL":9,"PIT-CLE":8,"PHI-NYG"
 const rivBase=(a,b)=>RIV[`${a}-${b}`]||RIV[`${b}-${a}`]||0;
 
 const E="/api/espn";
+
+async function _fetchJson(url, tries=2){
+  let lastErr=null;
+  for(let i=0;i<tries;i++){
+    try{
+      const r=await fetch(url,{cache:"no-store"});
+      const ct=(r.headers.get("content-type")||"").toLowerCase();
+      const txt= await r.text();
+      if(!r.ok){
+        const msg = txt && txt.length<400 ? txt : `HTTP ${r.status}`;
+        throw new Error(`Fetch failed: ${r.status} ${r.statusText} — ${msg}`);
+      }
+      if(ct.includes("application/json")) return JSON.parse(txt||"{}");
+      // Some edge cases return JSON without content-type
+      try{ return JSON.parse(txt||"{}"); }catch(e){
+        throw new Error("Non-JSON response from /api/espn (check Functions deployment).");
+      }
+    }catch(e){
+      lastErr=e;
+    }
+  }
+  throw lastErr||new Error("Fetch failed.");
+}
+
 export const espnSB=async p=>{const r=await fetch(`${E}/scoreboard?${new URLSearchParams(p)}`);if(!r.ok)throw 0;return(await r.json()).events||[]};
-export const espnSum=async id=>{const r=await fetch(`${E}/summary?event=${id}`);if(!r.ok)throw 0;return r.json()};
+export const espnSum=async id=>_fetchJson(`${E}/summary?event=${id}`,2);
 export const parseEv=ev=>{const c=ev.competitions?.[0];if(!c)return null;const hm=c.competitors?.find(x=>x.homeAway==="home"),aw=c.competitors?.find(x=>x.homeAway==="away");return{id:ev.id,date:ev.date,season:ev.season,week:ev.week,ht:hm?.team?.abbreviation||"???",at:aw?.team?.abbreviation||"???",hs:parseInt(hm?.score)||0,as:parseInt(aw?.score)||0,hr:hm?.records?.[0]?.summary||"",ar:aw?.records?.[0]?.summary||"",ven:c.venue?.fullName||"",att:c.attendance,done:c.status?.type?.completed}};
 
 export function getAllPlays(d){const dr=d?.drives?.previous||[];const p=[];for(const x of dr)for(const y of(x.plays||[]))p.push(y);return p}
