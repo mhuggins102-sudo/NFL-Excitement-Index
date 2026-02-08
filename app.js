@@ -231,6 +231,29 @@ function WPChart({series, mode, onModeChange, exc, topLev, label}){
 function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
   const{exc,kp,box,stats,pStats,wp}=d;const og=oGrade(exc.total);
   const date=new Date(g.date).toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+
+  const [catModal,setCatModal]=useState(null);
+  const openCat=(k,v)=>{
+    const wpS=wp?.series||[];
+    const top=(sumData?.topLeveragePlays||[]);
+    const clean=(s)=>_cleanPlay(s||"");
+    const fmt=(p)=>p.period?`${p.period>=5?"OT":`Q${p.period}`} ${p.clock||""}`:`t=${(p.tMin||0).toFixed(1)}m`;
+    const pick=(arr,n)=>arr.slice(0,n).map(p=>({when:fmt(p),text:clean(p.text||p.play||p.desc||""),delta:(p.delta!=null?100*p.delta:null),wp:p.wp}));
+    let contrib=[];
+    if(k==="leverage") contrib=pick(top,6);
+    else if(k==="clutch") contrib=pick(top.filter(p=>p.tMin!=null && p.tMin>=52),6);
+    else if(k==="chaos") contrib=pick(wpS.filter(p=>p.tag==="TO"||p.tag==="SP").sort((a,b)=>(b.absDelta||0)-(a.absDelta||0)),10);
+    else if(k==="swings"){
+      const swings=[];
+      for(let i=1;i<wpS.length;i++){
+        const a=wpS[i-1].wp,b=wpS[i].wp;
+        if(a==null||b==null) continue;
+        if((a<.5&&b>=.5)||(a>=.5&&b<.5)) swings.push(wpS[i]);
+      }
+      contrib=pick(swings,10);
+    }
+    setCatModal({k,v,contrib});
+  };
   const tags={td:["TD","t-td"],to:["TURNOVER","t-to"],bg:["BIG PLAY","t-bg"],cl:["CLUTCH","t-cl"],sp:["SPECIAL","t-sp"]};
 
   const passCols=["C/ATT","YDS","AVG","TD","INT","QBR"];
@@ -278,7 +301,7 @@ function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
           ...(box[0]?.qs||[]).map((_,i)=>h("th",{key:i},i>=4?`OT${i>4?i-3:""}`:`Q${i+1}`)),
           h("th",null,"Final"))),
         h("tbody",null,box.map((r,i)=>h("tr",{key:i,className:r.win?"win":""},
-          h("td",null,r.team),...r.qs.map((q,qi)=>h("td",{key:qi},q)),h("td",{className:"fc"},r.total)))))):null,
+          h("td",null,r.team),...r.qs.map((q,qi)=>h("td",{key:qi},(q===""||q==null)?"—":q)),h("td",{className:"fc"},r.total)))))):null,
 
     stats.length>0?h("div",{className:"sec an a2"},h("div",{className:"sec-h"},"Team Statistics"),
       h("table",{className:"st"},
@@ -325,6 +348,30 @@ function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
         h("h4",null,"Turnovers & Momentum (0–15)"),"INTs, fumbles, defensive/ST TDs, blocked kicks, turnovers on downs, missed FGs, safeties.",
         h("h4",null,"Lead Changes (0–10)"),"Minute-by-minute tracking of lead swaps and ties (0-0 start excluded).",
         h("h4",null,"Overtime (0–5)"),"Bonus for OT, extra for multiple OT periods."
+
+
+    ,catModal?h("div",{className:"mdl",onClick:(e)=>{if(e.target.classList.contains("mdl"))setCatModal(null);}},
+      h("div",{className:"mdlc"},
+        h("div",{className:"mdlh"},
+          h("div",null,catModal.v.name),
+          h("button",{className:"x",onClick:()=>setCatModal(null)},"×")
+        ),
+        h("div",{className:"mdlb"},
+          h("div",{style:{color:"var(--text-2)",marginBottom:".6rem"}},catModal.v.desc),
+          h("div",{style:{fontFamily:"JetBrains Mono",fontSize:".8rem",color:"var(--text-3)",marginBottom:".8rem"}},`This game: ${catModal.v.detail} (${catModal.v.score}/${catModal.v.max}).`),
+          catModal.contrib && catModal.contrib.length? h("div",null,
+            h("div",{style:{fontFamily:"JetBrains Mono",fontSize:".7rem",letterSpacing:".08em",textTransform:"uppercase",color:"var(--text-3)",marginBottom:".35rem"}},"Key contributors"),
+            h("div",{style:{display:"grid",gap:".4rem"}},
+              catModal.contrib.map((c,i)=>h("div",{key:i,className:"citem"},
+                h("div",{className:"ct"},c.when),
+                h("div",{className:"cx"},c.text||"(no play text)"),
+                c.delta!=null?h("div",{className:"cd"},`${Math.abs(c.delta).toFixed(1)} pts`):null
+              ))
+            )
+          ):h("div",{style:{color:"var(--text-3)"}}, "No specific contributors available for this category.")
+        )
+      )
+    ):null
       ):null));
 }
 
