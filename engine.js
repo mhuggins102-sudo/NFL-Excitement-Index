@@ -57,6 +57,22 @@ function parseClockToSeconds(clock){
   if(!m) return null;
   return (+m[1]*60 + +m[2]);
 }
+
+function elapsedSecFromStart(period, clockStr){
+  const per = +period || 1;
+  const secRem = parseClockToSeconds(clockStr);
+  const qLen = 15*60;
+  const otLen = 10*60; // regular season OT; close enough for excitement shape
+  if(per<=4){
+    const secElapsedInPer = (secRem==null)? null : (qLen - secRem);
+    if(secElapsedInPer==null) return null;
+    return (per-1)*qLen + secElapsedInPer;
+  }
+  // OT period numbers: 5 = OT1
+  const secElapsedInOT = (secRem==null)? null : (otLen - secRem);
+  if(secElapsedInOT==null) return null;
+  return 4*qLen + (per-5)*otLen + secElapsedInOT;
+}
 function periodLengthSec(period){
   // NFL regulation quarters 15:00. OT in ESPN feeds is typically 10:00 regular season, can be 15:00 playoffs.
   // We use 10:00 as a conservative default; if a 15:00 OT appears, the clock parsing still works and leverage is still meaningful.
@@ -65,7 +81,7 @@ function periodLengthSec(period){
 }
 function gameElapsedSec(period, clock){
   const p=period||1;
-  const rem=parseClockToSeconds(clock);
+  const rem=elapsedSecFromStart(per, clk);
   const len=periodLengthSec(p);
   if(rem==null) return null;
   // elapsed within current period:
@@ -82,7 +98,7 @@ function gameElapsedSec(period, clock){
 }
 function gameRemainingSec(period, clock){
   const p=period||1;
-  const rem=parseClockToSeconds(clock);
+  const rem=elapsedSecFromStart(per, clk);
   if(rem==null) return null;
   if(p<=4) return (4-p)*900 + rem;
   // OT: treat remaining as what's left in current OT frame
@@ -210,7 +226,10 @@ export function buildBox(d){
   const lines=[];
   for(const c of [away,home]){
     const team=c?.team?.abbreviation||"";
-    const qs=(c?.linescores||[]).map(x=>String((x&&x.value!=null)?x.value:0));
+    const qs=(c?.linescores||[]).map(x=>{
+      const v=(x?.value ?? x?.displayValue ?? x?.score ?? x?.display ?? null);
+      return (v==null) ? "" : String(v);
+    });
     const total=String((c&&c.score!=null)?c.score:"");
     lines.push({team,qs,total,win:c?.winner});
   }
@@ -426,7 +445,7 @@ function sortPlaysChrono(plays){
 }
 
 // Compute a WP series from available play-by-play.
-// Returns: [{wp, delta, absDelta, period, clock, text, teamId, homeScore, awayScore, remSec}]
+// Returns: [{wp, delta, absDelta, period, clock, text, teamId, homeScore, awayScore, elapsedSec}]
 export function playTag(text,type){
   const lo=(text||"").toLowerCase();
   const ty=(type||"").toLowerCase();
@@ -489,8 +508,8 @@ function computeWPSeries(d){
       wp, delta, absDelta,
       period:per,
       clock:clk,
-      remSec:rem,
-      tMin: (rem!=null ? (60 - rem/60) : null),
+      elapsedSec:rem,
+      tMin: (rem!=null ? (rem/60) : null),
       text:normSpace(p.text||p.shortText||p.type?.text||""),
       teamId:possTeamId,
       homeScore:lastScore.homeScore,
@@ -531,7 +550,7 @@ function computeWPSeries(d){
 
     // late leverage: last 8:00 of 4Q and all OT
     const per=series[i].period;
-    const rem=series[i].remSec;
+    const rem=series[i].elapsedSec;
     const isLate = (per===4 && rem!=null && rem<=480) || (per>4);
     if(isLate){
       lateAbs+=a;

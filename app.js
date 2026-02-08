@@ -1,6 +1,6 @@
 import{createElement as h,useState,useCallback,useEffect,useRef,Fragment}from"https://esm.sh/react@18.2.0";
 import{createRoot}from"https://esm.sh/react-dom@18.2.0/client";
-import{TEAMS,tn,TK,espnSB,espnSum,parseEv,computeExc,oGrade,gradeFor,extractKP,buildBox,buildStats,buildPlayerStats,buildSummaryData,getAllPlays,getWPSeries}from"./engine.js";
+import{TEAMS,tn,TK,espnSB,espnSum,parseEv,computeExc,oGrade,gradeFor,extractKP,buildBox,buildStats,buildPlayerStats,buildSummaryData,getAllPlays}from"./engine.js";
 
 const cc=c=>({s:"cs",a:"ca",b:"cb",c:"cc",d:"cd",f:"cf"}[c]||"");
 const bc=c=>({s:"bs",a:"ba",b:"bbl",c:"bc",d:"bd",f:"bf2"}[c]||"");
@@ -29,7 +29,7 @@ function _pick(arr,seed){
 }
 
 function _cleanPlay(s){
-  s=_ns(s);
+  s=_norm(s);
   if(!s) return "";
   // Strip boilerplate after XP / 2pt details to keep recaps readable.
   const cutMarkers=[
@@ -62,81 +62,70 @@ function _winnerLoser(sum){
   return {w:sum?.matchup||"", l:""};
 }
 
-function buildRecap(sum){
-  const arche=sum?.archetype?.type||"tight";
-  const top=(sum?.topLeveragePlays||[]).map(x=>({...x, text:_cleanPlay(x.text)})).filter(x=>x.text);
-  const wp=sum?.wpStats||null;
 
+function buildRecap(sum){
   const wl=_winnerLoser(sum);
   const score=_scoreLine(sum);
+  const wp=sum?.wpStats||null;
+  const top=(sum?.topLeveragePlays||[]).map(x=>({...x, text:_cleanPlay(x.text)})).filter(x=>x.text);
+  const vibe = (()=> {
+    const pts = (sum.homeScore||0)+(sum.awayScore||0);
+    if(wp && wp.crosses50>=6) return "a true seesaw";
+    if(wp && wp.minWp!=null && wp.minWp<0.25 && wl.w===sum.homeTeam) return "a comeback";
+    if(pts>=55) return "a shootout";
+    if(pts<=27) return "a grinder";
+    return "a tense finish";
+  })();
 
-  const seed=(sum.excitementScore||0)*11 + (wp?.crosses50||0)*29 + (wp?.crosses4060||0)*37;
-  const ledes={
-    comeback:[
-      `${wl.w} erased an early hole and finished it off, beating ${wl.l} ${score.split(",").slice(-1)[0].trim()}.`,
-      `${wl.w} found the game late and took it, topping ${wl.l} ${score.split(",").slice(-1)[0].trim()}.`,
-      `${wl.w} spent most of the day chasing, then flipped it when it mattered, winning ${score}.`
-    ],
-    collapse:[
-      `${wl.l} led, then watched it slide away — ${wl.w} stole it, ${score}.`,
-      `${wl.w} turned a game that looked settled into a win, taking it from ${wl.l}, ${score}.`,
-      `${wl.w} kept hanging around until the math changed, then closed it out, ${score}.`
-    ],
-    seesaw:[
-      `${wl.w} survived a game that kept turning over on itself, edging ${wl.l} ${score.split(",").slice(-1)[0].trim()}.`,
-      `${wl.w} and ${wl.l} traded control all afternoon before ${wl.w} finally landed the last punch, ${score}.`,
-      `${wl.w} outlasted ${wl.l} in a back-and-forth that never stabilized, ${score}.`
-    ],
-    wire:[
-      `${wl.w} controlled the shape of it and never really let ${wl.l} breathe, winning ${score}.`,
-      `${wl.w} played from in front and kept the answers coming, beating ${wl.l} ${score.split(",").slice(-1)[0].trim()}.`,
-      `${wl.w} dictated terms for most of the day and cashed it in, ${score}.`
-    ],
-    tight:[
-      `${wl.w} won a one-possession grinder, slipping past ${wl.l}, ${score}.`,
-      `${wl.w} and ${wl.l} stayed knotted into the fourth before ${wl.w} made the final play, ${score}.`,
-      `${wl.w} survived the margins and beat ${wl.l}, ${score}.`
-    ],
-    incomplete:[`${sum?.matchup||"The game"} finished ${score}.`]
-  };
+  const lead = (()=> {
+    const end = score.split(",").slice(-1)[0].trim();
+    const base = [
+      `${wl.w} beat ${wl.l} ${end} in ${vibe}.`,
+      `${wl.w} outlasted ${wl.l} ${end} in ${vibe}.`,
+      `${wl.w} edged ${wl.l} ${end} in ${vibe}.`
+    ];
+    return base[Math.floor(((sum.excitementScore||50)+ (wp?.crosses50||0)*7)%base.length)];
+  })();
 
-  const p1=_pick(ledes[arche]||ledes.tight, seed);
-
-  // Turning point paragraph: pick 2–3 biggest leverage plays, written as story beats.
-  const beats=top.slice(0,3).map((tp,i)=>{
-    const when=`${_fmtPer(tp.period)} ${tp.clock}`.trim();
-    const verb = i===0 ? "The swing started with" : i===1 ? "It flipped again on" : "Then it turned once more on";
-    return `${verb} ${when}: ${tp.text}.`;
+  const beats = top.slice(0,3).map(tp=>{
+    const when = tp.period?`${tp.period>=5?"OT":`Q${tp.period}`} ${tp.clock||""}`:"";
+    const d = tp.delta!=null ? Math.abs(tp.delta) : null;
+    const emph = d!=null && d>=0.35 ? "the hinge" : (d!=null && d>=0.20 ? "a major swing" : "a key moment");
+    return `${when?when+": ":""}${tp.text} — ${emph}.`;
   });
-  const p2 = beats.length ? beats.join(" ") : "";
 
-  // Context paragraph: keep it short and avoid overclaiming.
-  const ctxParts=[];
-  if(sum?.rivalryNote) ctxParts.push(sum.rivalryNote);
-  if(sum?.stakesNote) ctxParts.push(sum.stakesNote.trim());
-  const p3 = ctxParts.length ? _joinSentences([ctxParts.join(" ")]) : "";
+  const texture = (()=> {
+    if(!wp) return null;
+    const inD = wp.inDoubtPct!=null ? `${Math.round(wp.inDoubtPct)}%` : null;
+    const c50 = wp.crosses50!=null ? wp.crosses50 : null;
+    const late = wp.lateSumAbsDelta!=null ? wp.lateSumAbsDelta.toFixed(2) : null;
+    const parts=[];
+    if(inD) parts.push(`It spent about ${inD} of snaps in the 20–80% “in doubt” band.`);
+    if(c50!=null) parts.push(`Control crossed the 50/50 line ${c50} times.`);
+    if(late) parts.push(`Late leverage (52:00 + OT) totaled ${late} in Σ|ΔWP| terms.`);
+    return parts.join(" ");
+  })();
 
-  // Closing paragraph: concise stats + excitement label; keep WP stats as one clean sentence.
-  const leaders=(sum?.playerLeaders||[]).slice(0,2);
-  const leaderLine = leaders.length ? `Stat line: ${leaders.join("; ")}.` : "";
-  const wpLine = (wp && wp.sumAbs!=null) ? `It spent about ${Math.round((wp.inDoubtFrac||0)*100)}% of snaps in the “in doubt” band (20–80% WP), with ${wp.crosses50||0} true 50/50 crossings.` : "";
-  const p4 = _joinSentences([
-    wpLine,
-    leaderLine,
-    `Excitement Index: ${sum.excitementScore} (${sum.excitementVerdict}).`
-  ]);
+  const out=[lead];
+  if(beats.length) out.push(beats.join(" "));
+  if(texture) out.push(texture);
 
-  return [p1,p2,p3,p4].filter(p=>p && p.trim().length>0).slice(0,4);
+  return out;
 }
 
 
-function WPChart({series, mode, onModeChange, exc, topLev}){
+
+
+function WPChart({series, mode, onModeChange, exc, topLev, label}){
+  const [sel,setSel]=useState(null);
   if(!series || series.length<2){
     return h("div",{style:{color:"var(--text-3)",fontFamily:"JetBrains Mono",fontSize:".75rem"}}, "Win probability data unavailable.");
   }
 
-  const W=860, H=180, pad=24;
-  const toX = (t)=> pad + (t/60)*(W-2*pad);
+  const maxTraw = Math.max(60, ...series.map(s=>+s.tMin||0));
+  const maxT = Math.ceil(maxTraw/5)*5; // nicer ticks
+  const W=860, H=190, pad=26;
+  const toX = (t)=> pad + (t/maxT)*(W-2*pad);
   const toY = (wp)=> pad + (1-wp)*(H-2*pad);
 
   // Downsample for performance
@@ -148,192 +137,96 @@ function WPChart({series, mode, onModeChange, exc, topLev}){
   }
   const path = "M " + pts.map(p=>p[0].toFixed(2)+" "+p[1].toFixed(2)).join(" L ");
 
-  // Overlays
+  const opts=["Leverage","Swings","Chaos","Clutch"];
   const overlays=[];
+
+  // helper to create clickable dot
+  const dot=(x,y,fill,payload,r=3)=>h("circle",{cx:x,cy:y,r,fill,style:{cursor:"pointer"},onClick:()=>setSel(payload)});
+
   if(mode==="Leverage"){
-    const lev=(topLev||[]).slice(0,6);
+    const lev=(topLev||[]).slice(0,8);
     for(const tp of lev){
-      const t = tp.tMin!=null ? tp.tMin : null;
-      if(t==null) continue;
-      overlays.push(h("circle",{cx:toX(t), cy:toY(tp.wp||0.5), r:3, fill:"var(--gold)"}));
+      if(tp.tMin==null) continue;
+      overlays.push(dot(toX(tp.tMin), toY(tp.wp||0.5), "var(--gold)", {kind:"Leverage", ...tp}));
     }
   }else if(mode==="Swings"){
-    // mark 50/50 crossings
     for(let i=1;i<series.length;i++){
       const a=series[i-1].wp, b=series[i].wp;
       if(a==null||b==null) continue;
       if((a<0.5 && b>=0.5) || (a>=0.5 && b<0.5)){
-        overlays.push(h("circle",{cx:toX(series[i].tMin), cy:toY(series[i].wp), r:2.8, fill:"var(--blue)"}));
+        const s=series[i];
+        overlays.push(dot(toX(s.tMin), toY(s.wp), "var(--blue)", {kind:"Swing", ...s}, 2.8));
       }
     }
   }else if(mode==="Chaos"){
-    // highlight turnovers / special teams
     for(const s of series){
       if(s.tag==="TO" || s.tag==="SP"){
-        overlays.push(h("circle",{cx:toX(s.tMin), cy:toY(s.wp), r:2.8, fill:"var(--red)"}));
+        overlays.push(dot(toX(s.tMin), toY(s.wp), "var(--red)", {kind:"Chaos", ...s}, 2.8));
       }
     }
   }else if(mode==="Clutch"){
-    // last 8 minutes + OT band
-    overlays.push(h("rect",{x:toX(52), y:pad, width:toX(60)-toX(52), height:H-2*pad, fill:"rgba(201,162,39,.08)"}));
+    // Shade final 8 minutes of regulation + all OT
+    overlays.push(h("rect",{x:toX(52), y:pad, width:toX(maxT)-toX(52), height:H-2*pad, fill:"rgba(201,162,39,.08)"}));
   }
 
-  const opts=["Leverage","Swings","Chaos","Clutch"];
+  // Axis ticks
+  const ticks=[];
+  for(let t=0;t<=maxT;t+=10){
+    ticks.push(h("text",{x:toX(t), y:H-8, textAnchor:"middle", className:"wpt"}, String(t)));
+  }
+  ticks.push(h("text",{x:W-pad, y:H-8, textAnchor:"end", className:"wpt"}, "min"));
+
+  const tip = sel ? h("div",{className:"mdl"},
+    h("div",{className:"mdlc"},
+      h("div",{className:"mdlh"},
+        h("div",null,"WP Detail"),
+        h("button",{className:"x",onClick:()=>setSel(null)},"×")
+      ),
+      h("div",{className:"mdlb"},
+        h("div",{style:{fontFamily:"JetBrains Mono",fontSize:".75rem",color:"var(--text-2)",marginBottom:".5rem"}},
+          sel.period?`${sel.period>=5?"OT":`Q${sel.period}`} ${sel.clock||""}`:`t=${(sel.tMin||0).toFixed(1)}m`
+        ),
+        sel.text ? h("div",{style:{lineHeight:"1.35",marginBottom:".6rem"}}, sel.text) : null,
+        h("div",{style:{fontFamily:"JetBrains Mono",fontSize:".75rem",color:"var(--text-3)"}},
+          `WP: ${(100*(sel.wp||0)).toFixed(1)}%`,
+          sel.delta!=null?`  |  ΔWP: ${(100*sel.delta).toFixed(1)} pts`:""
+        ),
+        sel.kind? h("div",{style:{marginTop:".6rem",color:"var(--text-3)",fontSize:".85rem"}},
+          sel.kind==="Leverage"?"A high-leverage moment: one of the largest WP swings in the game.":
+          sel.kind==="Swing"?"A true swing point: the game crossed the 50/50 line here.":
+          sel.kind==="Chaos"?"Chaos marker: a turnover or special-teams event that materially shifted WP.":
+          ""
+        ):null
+      )
+    )
+  ):null;
 
   return h("div",{className:"sec"},
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:"1rem",flexWrap:"wrap"}},
-      h("div",{className:"sec-h",style:{borderBottom:"none",marginBottom:"0"}},"Win Probability (Home)"),
+      h("div",{className:"sec-h",style:{borderBottom:"none",marginBottom:"0"}},label||"Win Probability"),
       h("div",{style:{display:"flex",alignItems:"center",gap:".5rem"}},
         h("div",{style:{fontFamily:"JetBrains Mono",fontSize:".65rem",letterSpacing:".08em",textTransform:"uppercase",color:"var(--text-3)"}}, "Overlay"),
-        h("select",{value:mode,onChange:e=>onModeChange(e.target.value),style:{background:"var(--bg-3)",border:"1px solid var(--border-1)",color:"var(--text-1)",padding:".35rem .5rem",fontFamily:"JetBrains Mono",fontSize:".7rem"}},
-          opts.map(o=>h("option",{key:o,value:o},o))))),
-    h("div",{style:{border:"1px solid var(--border-1)",background:"var(--bg-2)",padding:".6rem .6rem .2rem",marginTop:".5rem"}},
-      h("svg",{viewBox:`0 0 ${W} ${H}`,width:"100%",height:"auto",preserveAspectRatio:"none"},
-        // midline
-        h("line",{x1:toX(0),y1:toY(0.5),x2:toX(60),y2:toY(0.5),stroke:"rgba(136,146,164,.35)",strokeWidth:"1",strokeDasharray:"4 4"}),
-        // clutch highlight underneath line
-        (mode==="Clutch")?overlays.shift():null,
-        h("path",{d:path,fill:"none",stroke:"rgba(232,236,240,.85)",strokeWidth:"2"}),
-        ...overlays
-      ),
-      h("div",{style:{display:"flex",justifyContent:"space-between",fontFamily:"JetBrains Mono",fontSize:".6rem",color:"var(--text-4)",marginTop:".25rem"}},
-        h("div",null,"0:00"),h("div",null,"15:00"),h("div",null,"30:00"),h("div",null,"45:00"),h("div",null,"60:00")
+        h("select",{value:mode,onChange:e=>onModeChange(e.target.value),style:{background:"var(--bg-3)",border:"1px solid var(--border-1)",color:"var(--text-1)",padding:".35rem .5rem",borderRadius:"10px",fontFamily:"JetBrains Mono",fontSize:".75rem"}},
+          opts.map(o=>h("option",{key:o,value:o},o))
+        )
       )
-    )
+    ),
+    h("div",{className:"svgw"},
+      h("svg",{viewBox:`0 0 ${W} ${H}`,width:"100%",height:"auto"},
+        h("rect",{x:0,y:0,width:W,height:H,rx:16,fill:"var(--bg-2)",stroke:"var(--border-1)"}),
+        h("line",{x1:pad,y1:toY(.5),x2:W-pad,y2:toY(.5),stroke:"rgba(255,255,255,.12)","strokeDasharray":"4 4"}),
+        h("path",{d:path,fill:"none",stroke:"var(--text-1)","strokeWidth":"2"}),
+        overlays,
+        ticks
+      ),
+      h("div",{style:{marginTop:".25rem",color:"var(--text-3)",fontFamily:"JetBrains Mono",fontSize:".72rem"}},
+        "Tip: click a dot to see the underlying play."
+      )
+    ),
+    tip
   );
 }
-function App(){
-  const[t1,sT1]=useState("");const[t2,sT2]=useState("");const[ssn,sSsn]=useState("2024");const[wk,sWk]=useState("");const[st,sSt]=useState("2");
-  const[games,sGames]=useState([]);const[ldg,sLdg]=useState(false);const[prog,sProg]=useState({p:0,t:""});
-  // FIX #4: date sort direction toggleable: "dateDesc" (new first) or "dateAsc" (old first) or "exc"
-  const[sort,sSort]=useState("dateDesc");
-  const[det,sDet]=useState(null);const[ldD,sLdD]=useState(false);const[err,sErr]=useState(null);
-  const[meth,sMeth]=useState(false);const[cache,sCache]=useState({});const[batching,sBatching]=useState(false);
-  const[summary,sSummary]=useState(null);const[sumData,sSumData]=useState(null);const[sumLoading,sSumLoading]=useState(false);const[selGame,sSelGame]=useState(null);
-  const detRef=useRef(null);
 
-  const seasons=[];for(let y=2024;y>=1970;y--)seasons.push(""+y);
-  const weeks=[];for(let w=1;w<=18;w++)weeks.push(""+w);
-
-  useEffect(()=>{if(det&&detRef.current)detRef.current.scrollIntoView({behavior:'smooth',block:'start'})},[det]);
-
-  const search=useCallback(async()=>{
-    if(!ssn&&!t1){sErr("Select at least a season or team.");return}
-    sLdg(true);sGames([]);sDet(null);sSummary(null);sErr(null);sCache({});sProg({p:0,t:"Searching..."});sSelGame(null);
-    // FIX #4: default to dateDesc after search
-    sSort("dateDesc");
-    try{
-      let fetchFailures=0;
-      let fetchBatches=0;
-      const res=[];let seasonsToSearch=ssn?[ssn]:[];
-      if(!ssn)for(let y=2024;y>=2015;y--)seasonsToSearch.push(""+y);
-      const types=st?[st]:["2","3"];const allBatches=[];
-      for(const season of seasonsToSearch){
-        if(wk){for(const s of types)allBatches.push({season,w:wk,s})}
-        else{for(const s of types){const mx=s==="3"?5:18;for(let w=1;w<=mx;w++)allBatches.push({season,w:""+w,s})}}}
-      let done=0;
-      for(let i=0;i<allBatches.length;i+=8){
-        const batch=allBatches.slice(i,i+8);
-        fetchBatches+=batch.length;
-        const r=await Promise.all(batch.map(({season,w,s})=>espnSB({dates:season,week:w,seasontype:s,limit:50}).then(ev=>ev.map(parseEv).filter(Boolean)).catch((e)=>{fetchFailures++;return []})));
-        for(const x of r)res.push(...x);done+=batch.length;
-        sProg({p:Math.round(done/allBatches.length*100),t:seasonsToSearch.length>1?`Searching ${seasonsToSearch.length} seasons... ${Math.round(done/allBatches.length*100)}%`:`Fetching week ${Math.min(done,allBatches.length)} of ${allBatches.length}...`})}
-            if(fetchBatches>0 && fetchFailures===fetchBatches){throw new Error("ALL_FETCHES_FAILED");}
-let f=res.filter(g=>g && (g.done || (g.hs!==0 || g.as!==0)));
-      if(t1){const nt=normTeam(t1);f=f.filter(g=>normTeam(g.ht)===nt||normTeam(g.at)===nt)}
-      if(t2){const nt2=normTeam(t2);f=f.filter(g=>normTeam(g.ht)===nt2||normTeam(g.at)===nt2)}
-      const seen=new Set();f=f.filter(g=>{if(seen.has(g.id))return false;seen.add(g.id);return true});
-      console.log("[DEBUG] games after filtering:", f.length, f.slice(0,3));
-      sGames(f);
-    }catch(e){if(String(e&&e.message)==="ALL_FETCHES_FAILED")sErr("No games returned because every ESPN fetch failed. This usually means your /api/espn Cloudflare Pages Functions are not deployed (or returning 404). See steps below."); else sErr("Failed to load games.")}
-    sLdg(false);sProg({p:100,t:""});
-  },[t1,t2,ssn,wk,st]);
-
-  const analyze=useCallback(async g=>{
-    sSelGame(g);sLdD(true);sDet(null);sErr(null);sSummary(null);
-    try{
-      let fetchFailures=0;
-      let fetchBatches=0;
-      const d=await espnSum(g.id);const exc=computeExc(g,d);const kp=extractKP(d);const wp=getWPSeries(d);
-      const box=buildBox(d);const stats=buildStats(d);const pStats=buildPlayerStats(d);
-      sDet({exc,kp,box,stats,pStats,d,wp});sCache(p=>({...p,[g.id]:exc.total}));sLdD(false);
-      sSumLoading(true);
-      const sumData=buildSummaryData(g,d,exc);
-      sSumData(sumData);
-      sSummary(buildRecap(sumData));
-      sSumLoading(false);
-    }catch(e){sErr("Failed to analyze. ESPN data may not be available.");sLdD(false)}
-  },[]);
-
-  const batchAn=useCallback(async()=>{
-    sBatching(true);const unc=games.filter(g=>!(g.id in cache));let done=0;
-    for(let i=0;i<unc.length;i+=4){
-      const b=unc.slice(i,i+4);
-      const r=await Promise.all(b.map(async g=>{try{const d=await espnSum(g.id);return{id:g.id,sc:computeExc(g,d).total}}catch{return{id:g.id,sc:0}}}));
-      const u={};for(const x of r)u[x.id]=x.sc;sCache(p=>({...p,...u}));
-      done+=b.length;sProg({p:Math.round(done/unc.length*100),t:`Analyzing ${done} of ${unc.length}...`})}
-    sBatching(false);sSort("exc");
-  },[games,cache]);
-
-  // FIX #4: Toggle date sort direction
-  function toggleDateSort(){
-    if(sort==="dateDesc")sSort("dateAsc");else sSort("dateDesc");
-  }
-
-  const sorted=[...games].sort((a,b)=>{
-    if(sort==="exc"){const sa=cache[a.id]??-1,sb=cache[b.id]??-1;return sb-sa}
-    if(sort==="dateAsc")return new Date(a.date)-new Date(b.date);
-    return new Date(b.date)-new Date(a.date); // dateDesc default
-  });
-
-  return h("div",{className:"app"},
-    h("div",{className:"hdr"},h("div",{className:"hdr-tag"},"1970 — Present"),h("h1",null,"NFL Excitement Index"),h("div",{className:"sub"},"Quantifying what makes football unforgettable")),
-    !det?h(Fragment,null,
-      // FIX #3: Removed "Find Games" label
-      h("div",{className:"sp"},
-        h("div",{className:"sr"},
-          h("div",{className:"fld"},h("label",null,"Team 1"),h("select",{value:t1,onChange:e=>sT1(e.target.value)},h("option",{value:""},"Any Team"),TK.map(k=>h("option",{key:k,value:k},TEAMS[k])))),
-          h("div",{className:"fld"},h("label",null,"Team 2"),h("select",{value:t2,onChange:e=>sT2(e.target.value)},h("option",{value:""},"Any Team"),TK.map(k=>h("option",{key:k,value:k},TEAMS[k])))),
-          h("div",{className:"fld"},h("label",null,"Season"),h("select",{value:ssn,onChange:e=>sSsn(e.target.value)},h("option",{value:""},"Last 10 Years"),seasons.map(s=>h("option",{key:s,value:s},s)))),
-          // FIX: Week and Type are grouped so they stay on the same row.
-          h("div",{className:"fld-row"},
-            h("div",{className:"fld fld-sm"},h("label",null,"Week"),h("select",{value:wk,onChange:e=>sWk(e.target.value)},h("option",{value:""},"All"),weeks.map(w=>h("option",{key:w,value:w},`Wk ${w}`)))),
-            h("div",{className:"fld fld-sm"},h("label",null,"Type"),h("select",{value:st,onChange:e=>sSt(e.target.value)},h("option",{value:"2"},"Regular"),h("option",{value:"3"},"Playoffs"),h("option",{value:""},"Both")))
-          ),
-          h("button",{className:"btn btn-p",onClick:search,disabled:ldg},ldg?"...":"Search")),
-        h("div",{className:"hints"},!ssn&&t1?"Will search 2015-2024. Select a season for faster results.":"Set a team + season to see all their games.")),
-      ldg?h("div",{className:"ld"},h("div",{className:"ld-r"}),h("div",{className:"ld-t"},prog.t),prog.p>0&&prog.p<100?h("div",{className:"pw"},h("div",{className:"pb"},h("div",{className:"pf",style:{width:`${prog.p}%`}}))):null):null,
-      err&&!det?h("div",{style:{textAlign:"center",padding:"2rem"}},h("div",{style:{color:"var(--red)",fontFamily:"Oswald",fontSize:"1.1rem"}},"Error"),h("div",{style:{color:"var(--text-3)",fontSize:".85rem"}},err)):null,
-      games.length>0&&!ldg?h("div",{className:"rl"},
-        h("div",{className:"rl-hdr"},
-          h("div",{className:"rl-cnt"},`${games.length} game${games.length!==1?"s":""} found`),
-          h("div",{className:"sc"},
-            // FIX #4: By Date toggles direction, shows arrow
-            h("button",{className:`sb${sort.startsWith("date")?" on":""}`,onClick:toggleDateSort},
-              sort==="dateAsc"?"Date ↑":"Date ↓"),
-            games.every(g=>g.id in cache)?h("button",{className:`sb${sort==="exc"?" on":""}`,onClick:()=>sSort("exc")},"By Excitement"):h("button",{className:"sb",onClick:batchAn,disabled:batching},batching?"Analyzing...":"Rank by Excitement"))),
-        batching?h("div",{className:"pw"},h("div",{className:"pb"},h("div",{className:"pf",style:{width:`${prog.p}%`}})),h("div",{className:"pl"},prog.t)):null,
-        sorted.map(g=>{const c=cache[g.id];const gr=c!=null?oGrade(c):null;
-          const hw=g.hs>g.as;const aw=g.as>g.hs;
-          const hiScore=Math.max(g.hs,g.as);const loScore=Math.min(g.hs,g.as);
-          // FIX #5: Show date for every game
-          const dateStr=new Date(g.date).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'});
-          return h("div",{key:g.id,className:"gr",onClick:()=>analyze(g)},
-            h("div",null,
-              h("span",{className:"mu"},
-                h("span",{className:aw?"wt":""},g.at),
-                h("span",{className:"at"}," @ "),
-                h("span",{className:hw?"wt":""},g.ht)),
-              c!=null?h("span",{className:`ep ${cc(gr.c)}`,style:{borderColor:`var(--g${gr.c})`}},`${c} — ${gr.g}`):null),
-            h("div",{className:"sc2"},`${hiScore}–${loScore}`),
-            h("div",{className:"mc"},dateStr,h("br"),g.week?.number?(g.season?.type===3?"Playoffs":`Week ${g.week.number}`):""))})
-            ):null,
-      (!ldg && !err && games.length===0)?h("div",{style:{textAlign:"center",padding:"2rem",color:"var(--text-3)",fontFamily:"JetBrains Mono",fontSize:".75rem"}}, "No games matched those filters.") : null
-    ):null,
-    ldD?h("div",{className:"ld"},h("div",{className:"ld-r"}),h("div",{className:"ld-t"},"Analyzing play-by-play data...")):null,
-    det&&selGame?h("div",{ref:detRef},h(Detail,{g:selGame,d:det,summary,sumLoading,meth,sMeth,onBack:()=>{sDet(null);sSelGame(null);sSummary(null)}})):null,
-    h("div",{className:"ftr"},"NFL Game Excitement Index · Play-by-play data from ESPN · Summaries powered by Claude"));
-}
 
 function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
   const{exc,kp,box,stats,pStats,wp}=d;const og=oGrade(exc.total);
@@ -385,7 +278,7 @@ function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
           ...(box[0]?.qs||[]).map((_,i)=>h("th",{key:i},i>=4?`OT${i>4?i-3:""}`:`Q${i+1}`)),
           h("th",null,"Final"))),
         h("tbody",null,box.map((r,i)=>h("tr",{key:i,className:r.win?"win":""},
-          h("td",null,r.team),...r.qs.map((q,qi)=>h("td",{key:qi},q==null?"—":q)),h("td",{className:"fc"},r.total==null?"—":r.total)))))):null,
+          h("td",null,r.team),...r.qs.map((q,qi)=>h("td",{key:qi},q)),h("td",{className:"fc"},r.total)))))):null,
 
     stats.length>0?h("div",{className:"sec an a2"},h("div",{className:"sec-h"},"Team Statistics"),
       h("table",{className:"st"},
@@ -401,11 +294,11 @@ function Detail({g,d,summary,sumData,sumLoading,meth,sMeth,onBack}){
 
     h("div",{className:"sec an a4"},h("div",{className:"sec-h"},"Excitement Breakdown"),
       h("div",{className:"gg"},Object.entries(exc.scores).map(([k,v])=>{const gr=gradeFor(v.score,v.max);const pct=v.score/v.max*100;
-        return h("div",{key:k,className:"gc"},
+        return h("div",{key:k,className:"gc",role:"button",tabIndex:0,onClick:()=>openCat(k,v),onKeyDown:(e)=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openCat(k,v);}}},
           h("div",{className:"gi"},h("h3",null,v.name),h("div",{className:"ds"},v.desc),h("div",{className:"dt"},v.detail),h("div",{className:"br"},h("div",{className:`bf ${bc(gr.c)}`,style:{width:`${pct}%`}}))),
           h("div",{className:`gbg ${cc(gr.c)}`},h("div",null,gr.g),h("div",{className:"pt"},`${v.score}/${v.max}`)))}))),
 
-    WPChart({series:wp?.series||[], mode:wpMode, onModeChange:setWpMode, exc, topLev:(sumData?.topLeveragePlays||[])}),
+    h(WPChart,{series:wp?.series||[], mode:wpMode, onModeChange:setWpMode, exc, topLev:(sumData?.topLeveragePlays||[]), label: sumData ? `Win Probability (${tn(sumData.homeTeam)||sumData.homeTeam})` : "Win Probability"}),
 
     h("div",{className:"sec an a5"},h("div",{className:"sec-h"},"Game Recap"),
       h("div",{className:"wb"},

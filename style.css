@@ -102,6 +102,22 @@ body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse
 .an{animation:fu .4s ease forwards}.a1{animation-delay:.05s;opacity:0}.a2{animation-delay:.12s;opacity:0}.a3{animation-delay:.2s;opacity:0}.a4{animation-delay:.28s;opacity:0}.a5{animation-delay:.36s;opacity:0}.a6{animation-delay:.44s;opacity:0}.a7{animation-delay:.52s;opacity:0}
 @media(max-width:600px){.sr{flex-direction:column}.fld{min-width:100%}.fld-sm{min-width:0;flex:1}.fld-row{display:flex;gap:.75rem;width:100%}.gr{grid-template-columns:1fr auto;gap:.5rem}.gr .mc{display:none}.gg{grid-template-columns:1fr}}
 
-/* layout fix: keep Week + Type on same row */
-.fld-row{display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap}
-.fld-row .fld{flex:1 1 220px}
+
+/* Modal (category + WP detail) */
+.mdl{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px;}
+.mdlc{width:min(720px,96vw);max-height:86vh;overflow:auto;background:var(--bg-2);border:1px solid var(--border-1);border-radius:18px;box-shadow:0 20px 60px rgba(0,0,0,.55);}
+.mdlh{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border-1);font-family:JetBrains Mono;font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--text-2);}
+.mdlb{padding:14px 16px;line-height:1.45;}
+.mdl .x{background:transparent;border:1px solid var(--border-1);color:var(--text-2);border-radius:10px;padding:.1rem .55rem;font-size:1.2rem;line-height:1;cursor:pointer;}
+.mdl .x:hover{border-color:var(--border-2);color:var(--text-1);}
+
+.svgw{margin-top:.6rem;}
+.wpt{font-family:JetBrains Mono;font-size:12px;fill:rgba(255,255,255,.55);}
+
+.citem{display:grid;grid-template-columns:110px 1fr 80px;gap:10px;align-items:start;padding:10px 10px;border:1px solid var(--border-1);border-radius:14px;background:rgba(255,255,255,.02);}
+.ct{font-family:JetBrains Mono;font-size:.72rem;color:var(--text-3);}
+.cx{font-size:.95rem;color:var(--text-1);line-height:1.25;}
+.cd{font-family:JetBrains Mono;font-size:.72rem;color:var(--gold);text-align:right;white-space:nowrap;}
+
+.gc{cursor:pointer;}
+.gc:focus{outline:2px solid rgba(201,162,39,.35);outline-offset:2px;}
